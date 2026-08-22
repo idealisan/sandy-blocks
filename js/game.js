@@ -78,6 +78,19 @@ function playClick() {
   o.connect(g); g.connect(ac.destination);
   o.start(t); o.stop(t + 0.09);
 }
+function playDrop() {
+  if (!soundOn) return;
+  const ac = getAudio(); if (!ac) return;
+  if (ac.state === 'suspended') ac.resume();
+  const t = ac.currentTime;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'triangle'; o.frequency.value = 420;
+  g.gain.setValueAtTime(0.13, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+  o.connect(g); g.connect(ac.destination);
+  o.frequency.exponentialRampToValueAtTime(180, t + 0.14);
+  o.start(t); o.stop(t + 0.14);
+}
 function playClear() {
   if (!soundOn) return;
   const ac = getAudio(); if (!ac) return;
@@ -299,7 +312,7 @@ function confirmDrop() {
   selSlot = -1;
   dragging = false;
   state = 'idle';
-  playClick();
+  playDrop();
 }
 
 function update(dt) {
