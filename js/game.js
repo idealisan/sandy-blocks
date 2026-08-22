@@ -10,6 +10,7 @@ const DANGER_ROW = Math.round(GH * 0.2), CLEAR_MIN = 600, DROP_STEP = 34;
 const SLOT_Y = 536, SLOT_H = 120, SLOT_W = 120, SLOT_GAP = 16;
 const SLOT_X0 = (DESIGN_W - (SLOT_W * 3 + SLOT_GAP * 2)) / 2;
 const BTN = { x: DESIGN_W / 2 - 95, y: 552, w: 190, h: 58 };
+const SPEAKER = { x: DESIGN_W - 36, y: 10, w: 26, h: 26, r: 7 };
 
 const PALETTE = [null,
   ['#4a90e8', '#2c5cb0'],
@@ -52,10 +53,52 @@ let aimCol = 0, restCount = 0, parity = 0;
 let fallings = [];
 let score = 0, best = 0, newBest = false;
 let flashes = [];
-
+let soundOn = true;
 try {
+  const v = localStorage.getItem('sand-sound');
+  if (v !== null) soundOn = v !== '0';
   best = parseInt(localStorage.getItem('sand-best'), 10) || 0;
 } catch (e) {}
+
+let audioCtx = null;
+function getAudio() {
+  if (audioCtx) return audioCtx;
+  try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; }
+  return audioCtx;
+}
+function playClick() {
+  if (!soundOn) return;
+  const ac = getAudio(); if (!ac) return;
+  if (ac.state === 'suspended') ac.resume();
+  const t = ac.currentTime;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'sine'; o.frequency.value = 860;
+  g.gain.setValueAtTime(0.14, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+  o.connect(g); g.connect(ac.destination);
+  o.start(t); o.stop(t + 0.09);
+}
+function playClear() {
+  if (!soundOn) return;
+  const ac = getAudio(); if (!ac) return;
+  if (ac.state === 'suspended') ac.resume();
+  const t = ac.currentTime;
+  [0, 0.09, 0.18].forEach((d, i) => {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = i === 1 ? 'triangle' : 'sine';
+    o.frequency.value = [523, 659, 784][i];
+    g.gain.setValueAtTime(0.16, t + d);
+    g.gain.exponentialRampToValueAtTime(0.001, t + d + 0.28);
+    o.connect(g); g.connect(ac.destination);
+    o.start(t + d); o.stop(t + d + 0.28);
+  });
+  const o2 = ac.createOscillator(), g2 = ac.createGain();
+  o2.type = 'sine'; o2.frequency.value = 180;
+  g2.gain.setValueAtTime(0.18, t);
+  g2.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+  o2.connect(g2); g2.connect(ac.destination);
+  o2.start(t); o2.stop(t + 0.22);
+}
 
 function genPiece() {
   return {
@@ -217,6 +260,7 @@ function checkClear() {
   }
   if (any) {
     restCount = 0;
+    playClear();
   } else {
     finalizeTurn();
   }
@@ -255,6 +299,7 @@ function confirmDrop() {
   selSlot = -1;
   dragging = false;
   state = 'idle';
+  playClick();
 }
 
 function update(dt) {
@@ -446,6 +491,19 @@ function render(now) {
     ctx.font = '600 20px -apple-system,system-ui,sans-serif';
     ctx.fillText('重新开始', DESIGN_W / 2, BTN.y + 37);
   }
+  rr(SPEAKER.x, SPEAKER.y, SPEAKER.w, SPEAKER.h, SPEAKER.r);
+  ctx.fillStyle = soundOn ? '#1a2452' : '#2a1630';
+  ctx.fill();
+  ctx.strokeStyle = soundOn ? '#2c3a70' : '#6b2a3a';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '15px sans-serif';
+  ctx.fillStyle = soundOn ? '#dfe6ff' : '#ff8a9a';
+  ctx.fillText(soundOn ? '🔊' : '🔇', SPEAKER.x + SPEAKER.w / 2 + 0.5, SPEAKER.y + SPEAKER.h / 2 + 1);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
 }
 
 function toDesign(e) {
@@ -457,14 +515,23 @@ function toDesign(e) {
 function inBtn(px, py) {
   return px >= BTN.x && px <= BTN.x + BTN.w && py >= BTN.y && py <= BTN.y + BTN.h;
 }
+function inSpeaker(px, py) {
+  return px >= SPEAKER.x && px <= SPEAKER.x + SPEAKER.w && py >= SPEAKER.y && py <= SPEAKER.y + SPEAKER.h;
+}
 
 canvas.addEventListener('pointerdown', e => {
   e.preventDefault();
   pressed = true;
   try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   const [px, py] = toDesign(e);
+  if (inSpeaker(px, py)) {
+    soundOn = !soundOn;
+    try { localStorage.setItem('sand-sound', soundOn ? '1' : '0'); } catch (err) {}
+    if (soundOn) playClick();
+    return;
+  }
   if (state === 'over') {
-    if (inBtn(px, py)) restart();
+    if (inBtn(px, py)) { playClick(); restart(); }
     return;
   }
   if (state === 'idle') {
@@ -473,6 +540,7 @@ canvas.addEventListener('pointerdown', e => {
       : -1;
     if (idx >= 0 && idx < 3 && queue[idx] && px >= SLOT_X0 + idx * (SLOT_W + SLOT_GAP) && px <= SLOT_X0 + idx * (SLOT_W + SLOT_GAP) + SLOT_W) {
       startAim(idx);
+      playClick();
     }
   } else if (state === 'aim') {
     dragging = true;
@@ -490,8 +558,9 @@ canvas.addEventListener('pointermove', e => {
 canvas.addEventListener('pointerup', e => {
   pressed = false;
   const [px, py] = toDesign(e);
+  if (inSpeaker(px, py)) return;
   if (state === 'over') {
-    if (inBtn(px, py)) restart();
+    if (inBtn(px, py)) { playClick(); restart(); }
     return;
   }
   if (state === 'aim' && dragging) confirmDrop();
