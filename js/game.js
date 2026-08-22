@@ -4,10 +4,10 @@ const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
 const DESIGN_W = 440, DESIGN_H = 880;
-const GW = 48, GH = 96, CELL = 7;
-const BOARD_X = 52, BOARD_Y = 78, BOARD_W = GW * CELL, BOARD_H = GH * CELL;
-const DANGER_ROW = 18, CLEAR_MIN = 90, DROP_STEP = 34;
-const SLOT_Y = 764, SLOT_H = 100, SLOT_W = 120, SLOT_GAP = 16;
+const GW = 100, GH = 100, CELL = 4, SUB = 6;
+const BOARD_X = (DESIGN_W - GW * CELL) / 2, BOARD_Y = 112, BOARD_W = GW * CELL, BOARD_H = GH * CELL;
+const DANGER_ROW = Math.round(GH * 0.2), CLEAR_MIN = 600, DROP_STEP = 34;
+const SLOT_Y = 536, SLOT_H = 120, SLOT_W = 120, SLOT_GAP = 16;
 const SLOT_X0 = (DESIGN_W - (SLOT_W * 3 + SLOT_GAP * 2)) / 2;
 const BTN = { x: DESIGN_W / 2 - 95, y: 552, w: 190, h: 58 };
 
@@ -19,26 +19,37 @@ const PALETTE = [null,
   ['#41c3cd', '#2b98a1']
 ];
 
-const SHAPES = [
-  { c: [[0, 0], [1, 0], [0, 1], [1, 1]] },
+const RAW_SHAPES = [
+  { c: [[0, 0]] },
   { c: [[0, 0], [1, 0], [2, 0], [3, 0]] },
   { c: [[0, 0], [1, 0], [2, 0], [1, 1]] },
   { c: [[1, 0], [2, 0], [0, 1], [1, 1]] },
   { c: [[0, 0], [1, 0], [1, 1], [2, 1]] },
   { c: [[0, 0], [0, 1], [0, 2], [1, 2]] },
   { c: [[1, 0], [1, 1], [1, 2], [0, 2]] }
-].map(s => ({
-  cells: s.c,
-  w: Math.max(...s.c.map(p => p[0])) + 1,
-  h: Math.max(...s.c.map(p => p[1])) + 1
-}));
+];
+
+const SHAPES = RAW_SHAPES.map(s => {
+  const cells = [];
+  for (const [cx, cy] of s.c) {
+    for (let dy = 0; dy < SUB; dy++) {
+      for (let dx = 0; dx < SUB; dx++) cells.push([cx * SUB + dx, cy * SUB + dy]);
+    }
+  }
+  return {
+    cells,
+    w: (Math.max(...s.c.map(p => p[0])) + 1) * SUB,
+    h: (Math.max(...s.c.map(p => p[1])) + 1) * SUB
+  };
+});
 
 let grid = new Uint8Array(GW * GH);
 let queue = [];
 let selSlot = -1;
 let state = 'idle';
 let pressed = false, dragging = false;
-let active = null, aimCol = 0, prevRow = 0, dropAcc = 0, restCount = 0, parity = 0;
+let aimCol = 0, restCount = 0, parity = 0;
+let fallings = [];
 let score = 0, best = 0, newBest = false;
 let flashes = [];
 
@@ -54,7 +65,9 @@ function genPiece() {
 }
 
 function refillQueue() {
-  while (queue.length < 3) queue.push(genPiece());
+  queue[0] = genPiece();
+  queue[1] = genPiece();
+  queue[2] = genPiece();
 }
 
 function saveBest() {
@@ -63,15 +76,42 @@ function saveBest() {
   } catch (e) {}
 }
 
-function restart() {
+function generateInitialSand() {
   grid.fill(0);
+  const target = Math.floor(GW * GH * 0.2);
+  let occupied = 0;
+  let tries = 0;
+  while (occupied < target && tries < 60) {
+    const p = genPiece();
+    const maxX = GW - p.shape.w;
+    const x = maxX > 0 ? (Math.random() * (maxX + 1) | 0) : 0;
+    let y = -p.shape.h;
+    while (y + 1 < GH && !collides(x, y + 1, p.shape)) y++;
+    for (const [cx, cy] of p.shape.cells) {
+      const gy = y + cy, gx = x + cx;
+      if (gy >= 0 && gy < GH) grid[gy * GW + gx] = p.color;
+    }
+    for (let s = 0; s < 80; s++) if (sandPass() === 0) break;
+    occupied = 0;
+    for (let i = 0; i < grid.length; i++) if (grid[i]) occupied++;
+    tries++;
+  }
+  for (let s = 0; s < 200; s++) if (sandPass() === 0) break;
+  restCount = 0;
+  parity = 0;
+}
+
+function restart() {
+  generateInitialSand();
   score = 0;
   newBest = false;
   flashes.length = 0;
   queue.length = 0;
   refillQueue();
   selSlot = -1;
-  active = null;
+  fallings.length = 0;
+  restCount = 0;
+  parity = 0;
   state = 'idle';
 }
 
@@ -84,15 +124,26 @@ function collides(px, py, sh) {
   return false;
 }
 
-function land() {
-  for (const [cx, cy] of active.shape.cells) {
-    const gy = active.y + cy;
-    if (gy >= 0) grid[gy * GW + active.x + cx] = active.color;
+function collidesFallings(px, py, sh, selfIdx) {
+  for (let j = 0; j < fallings.length; j++) if (j !== selfIdx) {
+    const o = fallings[j];
+    for (const [cx, cy] of sh.cells) {
+      const gx = px + cx, gy = py + cy;
+      for (const [ox, oy] of o.shape.cells) {
+        if (gx === o.x + ox && gy === o.y + oy) return true;
+      }
+    }
   }
-  active = null;
+  return false;
+}
+
+function landOne(f) {
+  for (const [cx, cy] of f.shape.cells) {
+    const gy = f.y + cy;
+    if (gy >= 0) grid[gy * GW + f.x + cx] = f.color;
+  }
   restCount = 0;
   parity = 0;
-  state = 'settle';
 }
 
 function sandPass() {
@@ -138,16 +189,19 @@ function checkClear() {
     stack.push(i);
     seen[i] = 1;
     const reg = [];
+    let touchL = false, touchR = false;
     while (stack.length) {
       const j = stack.pop();
       reg.push(j);
       const x = j % GW, y = (j / GW) | 0;
+      if (x === 0) touchL = true;
+      if (x === GW - 1) touchR = true;
       if (x > 0 && !seen[j - 1] && grid[j - 1] === col) { seen[j - 1] = 1; stack.push(j - 1); }
       if (x < GW - 1 && !seen[j + 1] && grid[j + 1] === col) { seen[j + 1] = 1; stack.push(j + 1); }
       if (y > 0 && !seen[j - GW] && grid[j - GW] === col) { seen[j - GW] = 1; stack.push(j - GW); }
       if (y < GH - 1 && !seen[j + GW] && grid[j + GW] === col) { seen[j + GW] = 1; stack.push(j + GW); }
     }
-    if (reg.length >= CLEAR_MIN) {
+    if (touchL && touchR) {
       any = true;
       score += reg.length;
       for (const j of reg) {
@@ -176,7 +230,8 @@ function finalizeTurn() {
       if (grid[y * GW + x]) { over = true; break outer; }
     }
   }
-  state = over ? 'over' : 'idle';
+  if (over) state = 'over';
+  else if (state !== 'aim') state = 'idle';
 }
 
 function startAim(i) {
@@ -193,36 +248,44 @@ function updateAim(px) {
 }
 
 function confirmDrop() {
-  active = queue[selSlot];
-  queue[selSlot] = genPiece();
-  active.x = aimCol;
-  active.y = -active.shape.h;
-  prevRow = active.y;
-  dropAcc = 0;
+  const p = queue[selSlot];
+  queue[selSlot] = null;
+  if (queue.every(v => !v)) refillQueue();
+  fallings.push({ shape: p.shape, color: p.color, x: aimCol, y: -p.shape.h, prevRow: -p.shape.h, dropAcc: 0 });
   selSlot = -1;
   dragging = false;
-  state = 'drop';
+  state = 'idle';
 }
 
 function update(dt) {
-  if (state === 'drop') {
-    dropAcc += dt;
-    while (state === 'drop' && dropAcc >= DROP_STEP) {
-      dropAcc -= DROP_STEP;
-      const ny = active.y + 1;
-      if (collides(active.x, ny, active.shape)) {
-        land();
+  for (let i = fallings.length - 1; i >= 0; i--) {
+    const f = fallings[i];
+    f.dropAcc += dt;
+    while (f.dropAcc >= DROP_STEP) {
+      f.dropAcc -= DROP_STEP;
+      const ny = f.y + 1;
+      if (collides(f.x, ny, f.shape)) {
+        landOne(f);
+        fallings.splice(i, 1);
         break;
       }
-      prevRow = active.y;
-      active.y = ny;
+      if (collidesFallings(f.x, ny, f.shape, i)) {
+        f.dropAcc = 0;
+        break;
+      }
+      f.prevRow = f.y;
+      f.y = ny;
     }
-  } else if (state === 'settle') {
-    for (let s = 0; s < 2; s++) {
-      restCount = sandPass() > 0 ? 0 : restCount + 1;
-    }
-    if (restCount >= 4) checkClear();
   }
+  for (let s = 0; s < 2; s++) {
+    const moved = sandPass();
+    if (fallings.length === 0) {
+      restCount = moved > 0 ? 0 : restCount + 1;
+    } else {
+      restCount = 0;
+    }
+  }
+  if (fallings.length === 0 && restCount >= 4) checkClear();
   for (let i = flashes.length - 1; i >= 0; i--) {
     flashes[i].t += dt;
     if (flashes[i].t > 450) flashes.splice(i, 1);
@@ -249,7 +312,14 @@ function render(now) {
   ctx.fillStyle = '#141d40';
   ctx.fillRect(0, 0, DESIGN_W, DESIGN_H);
 
-  rr(24, 10, 170, 50, 8);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#dfe6ff';
+  ctx.font = '600 17px -apple-system,system-ui,sans-serif';
+  ctx.fillText('沙子俄罗斯方块', DESIGN_W / 2, 34);
+  ctx.textAlign = 'left';
+
+  rr(24, 48, 170, 52, 8);
   ctx.fillStyle = '#1a2452';
   ctx.fill();
   ctx.strokeStyle = '#2c3a70';
@@ -257,29 +327,23 @@ function render(now) {
   ctx.stroke();
   ctx.fillStyle = '#93a5dd';
   ctx.font = '12px -apple-system,system-ui,sans-serif';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillText('分数', 36, 28);
+  ctx.fillText('分数', 36, 70);
   ctx.fillStyle = '#ffffff';
   ctx.font = '600 22px -apple-system,system-ui,sans-serif';
-  ctx.fillText(String(score), 36, 52);
+  ctx.fillText(String(score), 36, 93);
 
-  rr(DESIGN_W - 194, 10, 170, 50, 8);
+  rr(DESIGN_W - 194, 48, 170, 52, 8);
   ctx.fillStyle = '#1a2452';
   ctx.fill();
   ctx.stroke();
   ctx.fillStyle = '#93a5dd';
   ctx.font = '12px -apple-system,system-ui,sans-serif';
-  ctx.fillText('最高分', DESIGN_W - 182, 28);
+  ctx.fillText('最高分', DESIGN_W - 182, 70);
   ctx.fillStyle = '#ffd75e';
   ctx.font = '600 22px -apple-system,system-ui,sans-serif';
   ctx.textAlign = 'right';
-  ctx.fillText(String(best), DESIGN_W - 38, 52);
-
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#dfe6ff';
-  ctx.font = '600 17px -apple-system,system-ui,sans-serif';
-  ctx.fillText('沙子俄罗斯方块', DESIGN_W / 2, 42);
+  ctx.fillText(String(best), DESIGN_W - 38, 93);
+  ctx.textAlign = 'left';
 
   rr(BOARD_X - 6, BOARD_Y - 6, BOARD_W + 12, BOARD_H + 12, 8);
   ctx.fillStyle = '#0e1430';
@@ -319,10 +383,11 @@ function render(now) {
       drawGrain(aimCol + cx, cy, q.color, CELL);
     }
     ctx.globalAlpha = 1;
-  } else if (state === 'drop' && active) {
-    const ry = prevRow + (active.y - prevRow) * Math.min(dropAcc / DROP_STEP, 1);
-    for (const [cx, cy] of active.shape.cells) {
-      drawGrain(active.x + cx, Math.round(ry) + cy, active.color, CELL);
+  }
+  for (const f of fallings) {
+    const ry = f.prevRow + (f.y - f.prevRow) * Math.min(f.dropAcc / DROP_STEP, 1);
+    for (const [cx, cy] of f.shape.cells) {
+      drawGrain(f.x + cx, Math.round(ry) + cy, f.color, CELL);
     }
   }
 
@@ -331,6 +396,7 @@ function render(now) {
   ctx.fillStyle = '#ff3b30';
   ctx.fillRect(BOARD_X, BOARD_Y + DANGER_ROW * CELL - 1.5, BOARD_W, 3);
 
+  const slotScale = Math.min((SLOT_W - 30) / (24 * CELL), (SLOT_H - 30) / (18 * CELL));
   for (let i = 0; i < 3; i++) {
     const sx = SLOT_X0 + i * (SLOT_W + SLOT_GAP);
     rr(sx, SLOT_Y, SLOT_W, SLOT_H, 12);
@@ -342,8 +408,7 @@ function render(now) {
     const p = queue[i];
     if (p && !(state === 'aim' && selSlot === i)) {
       const sh = p.shape;
-      const scale = Math.min((SLOT_W - 30) / (sh.w * CELL), (SLOT_H - 30) / (sh.h * CELL));
-      const dw = CELL * scale;
+      const dw = CELL * slotScale;
       const ox = sx + (SLOT_W - sh.w * dw) / 2;
       const oy = SLOT_Y + (SLOT_H - sh.h * dw) / 2;
       for (const [cx, cy] of sh.cells) {
@@ -352,6 +417,12 @@ function render(now) {
       }
     }
   }
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#55628f';
+  ctx.font = '13px -apple-system,system-ui,sans-serif';
+  ctx.fillText('点选方块 · 棋盘上滑动选列 · 松手落下', DESIGN_W / 2, 840);
+  ctx.textAlign = 'left';
 
   if (state === 'over') {
     ctx.fillStyle = 'rgba(6,8,20,0.72)';
@@ -400,7 +471,7 @@ canvas.addEventListener('pointerdown', e => {
     const idx = py >= SLOT_Y
       ? Math.floor((px - SLOT_X0) / (SLOT_W + SLOT_GAP))
       : -1;
-    if (idx >= 0 && idx < 3 && px >= SLOT_X0 + idx * (SLOT_W + SLOT_GAP) && px <= SLOT_X0 + idx * (SLOT_W + SLOT_GAP) + SLOT_W) {
+    if (idx >= 0 && idx < 3 && queue[idx] && px >= SLOT_X0 + idx * (SLOT_W + SLOT_GAP) && px <= SLOT_X0 + idx * (SLOT_W + SLOT_GAP) + SLOT_W) {
       startAim(idx);
     }
   } else if (state === 'aim') {
@@ -444,6 +515,7 @@ function resize() {
 window.addEventListener('resize', resize);
 
 refillQueue();
+generateInitialSand();
 resize();
 let last = performance.now();
 requestAnimationFrame(function frame(now) {
@@ -453,4 +525,8 @@ requestAnimationFrame(function frame(now) {
   render(now);
   requestAnimationFrame(frame);
 });
+
+if (typeof location !== 'undefined' && location.search.indexOf('debug') >= 0) {
+  window.__sandDebug = () => ({ state, score, best, grid, queue, fallings });
+}
 })();
