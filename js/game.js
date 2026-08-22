@@ -586,7 +586,10 @@ canvas.addEventListener('pointercancel', () => {
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  const scale = Math.min(window.innerWidth / DESIGN_W, window.innerHeight / DESIGN_H);
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const topMargin = rem * 2;
+  const availH = Math.max(0, window.innerHeight - topMargin);
+  const scale = Math.min(window.innerWidth / DESIGN_W, availH / DESIGN_H);
   canvas.style.width = DESIGN_W * scale + 'px';
   canvas.style.height = DESIGN_H * scale + 'px';
   canvas.width = Math.round(DESIGN_W * scale * dpr);
