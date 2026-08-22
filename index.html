@@ -13,6 +13,18 @@
     touch-action: none;
     -webkit-user-select: none; user-select: none;
   }
+  html { padding-top: env(safe-area-inset-top, 0px); }
+  body::before {
+    content: "";
+    position: fixed;
+    left: 0; right: 0; top: 0;
+    height: 2rem;
+    height: calc(2rem + env(safe-area-inset-top, 0px));
+    background: #0e1430;
+    border-bottom: 1px solid #1e2a5a;
+    z-index: 1;
+    pointer-events: none;
+  }
   #stage {
     position: absolute;
     left: 50%;
@@ -21,12 +33,13 @@
     transform: translateX(-50%);
     display: flex;
     flex-direction: column;
+    z-index: 2;
   }
   canvas { display: block; border-radius: 8px; }
 </style>
 </head>
 <body>
 <div id="stage"><canvas id="game"></canvas></div>
-<script src="js/game.js?v=20260822-9"></script>
+<script src="js/game.js?v=20260822-10"></script>
 </body>
 </html>
