@@ -5,12 +5,13 @@ const ctx = canvas.getContext('2d');
 
 const DESIGN_W = 440, DESIGN_H = 880;
 const GW = 100, GH = 100, CELL = 4, SUB = 6;
-const BOARD_X = (DESIGN_W - GW * CELL) / 2, BOARD_Y = 112, BOARD_W = GW * CELL, BOARD_H = GH * CELL;
+const TOP_OFFSET = 32;
+const BOARD_X = (DESIGN_W - GW * CELL) / 2, BOARD_Y = 112 + TOP_OFFSET, BOARD_W = GW * CELL, BOARD_H = GH * CELL;
 const DANGER_ROW = Math.round(GH * 0.2), CLEAR_MIN = 600, DROP_STEP = 34;
-const SLOT_Y = 536, SLOT_H = 120, SLOT_W = 120, SLOT_GAP = 16;
+const SLOT_Y = 536 + TOP_OFFSET, SLOT_H = 120, SLOT_W = 120, SLOT_GAP = 16;
 const SLOT_X0 = (DESIGN_W - (SLOT_W * 3 + SLOT_GAP * 2)) / 2;
-const BTN = { x: DESIGN_W / 2 - 95, y: 552, w: 190, h: 58 };
-const SPEAKER = { x: DESIGN_W - 36, y: 10, w: 26, h: 26, r: 7 };
+const BTN = { x: DESIGN_W / 2 - 95, y: 552 + TOP_OFFSET, w: 190, h: 58 };
+const SPEAKER = { x: DESIGN_W - 36, y: 10 + TOP_OFFSET, w: 26, h: 26, r: 7 };
 
 const PALETTE = [null,
   ['#4a90e8', '#2c5cb0'],
@@ -374,10 +375,10 @@ function render(now) {
   ctx.textBaseline = 'alphabetic';
   ctx.fillStyle = '#dfe6ff';
   ctx.font = '600 17px -apple-system,system-ui,sans-serif';
-  ctx.fillText('沙子俄罗斯方块', DESIGN_W / 2, 34);
+  ctx.fillText('沙子俄罗斯方块', DESIGN_W / 2, 34 + TOP_OFFSET);
   ctx.textAlign = 'left';
 
-  rr(24, 48, 170, 52, 8);
+  rr(24, 48 + TOP_OFFSET, 170, 52, 8);
   ctx.fillStyle = '#1a2452';
   ctx.fill();
   ctx.strokeStyle = '#2c3a70';
@@ -385,22 +386,22 @@ function render(now) {
   ctx.stroke();
   ctx.fillStyle = '#93a5dd';
   ctx.font = '12px -apple-system,system-ui,sans-serif';
-  ctx.fillText('分数', 36, 70);
+  ctx.fillText('分数', 36, 70 + TOP_OFFSET);
   ctx.fillStyle = '#ffffff';
   ctx.font = '600 22px -apple-system,system-ui,sans-serif';
-  ctx.fillText(String(score), 36, 93);
+  ctx.fillText(String(score), 36, 93 + TOP_OFFSET);
 
-  rr(DESIGN_W - 194, 48, 170, 52, 8);
+  rr(DESIGN_W - 194, 48 + TOP_OFFSET, 170, 52, 8);
   ctx.fillStyle = '#1a2452';
   ctx.fill();
   ctx.stroke();
   ctx.fillStyle = '#93a5dd';
   ctx.font = '12px -apple-system,system-ui,sans-serif';
-  ctx.fillText('最高分', DESIGN_W - 182, 70);
+  ctx.fillText('最高分', DESIGN_W - 182, 70 + TOP_OFFSET);
   ctx.fillStyle = '#ffd75e';
   ctx.font = '600 22px -apple-system,system-ui,sans-serif';
   ctx.textAlign = 'right';
-  ctx.fillText(String(best), DESIGN_W - 38, 93);
+  ctx.fillText(String(best), DESIGN_W - 38, 93 + TOP_OFFSET);
   ctx.textAlign = 'left';
 
   rr(BOARD_X - 6, BOARD_Y - 6, BOARD_W + 12, BOARD_H + 12, 8);
@@ -488,14 +489,14 @@ function render(now) {
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffffff';
     ctx.font = '600 34px -apple-system,system-ui,sans-serif';
-    ctx.fillText('游戏结束', DESIGN_W / 2, 470);
+    ctx.fillText('游戏结束', DESIGN_W / 2, 470 + TOP_OFFSET);
     ctx.font = '600 26px -apple-system,system-ui,sans-serif';
     ctx.fillStyle = '#ffd75e';
-    ctx.fillText(String(score), DESIGN_W / 2, 515);
+    ctx.fillText(String(score), DESIGN_W / 2, 515 + TOP_OFFSET);
     if (newBest) {
       ctx.font = '14px -apple-system,system-ui,sans-serif';
       ctx.fillStyle = '#ff9f43';
-      ctx.fillText('新纪录!', DESIGN_W / 2, 540);
+      ctx.fillText('新纪录!', DESIGN_W / 2, 540 + TOP_OFFSET);
     }
     rr(BTN.x, BTN.y, BTN.w, BTN.h, 29);
     ctx.fillStyle = '#2f66e0';
@@ -586,10 +587,7 @@ canvas.addEventListener('pointercancel', () => {
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-  const topMargin = rem * 2;
-  const availH = Math.max(0, window.innerHeight - topMargin);
-  const scale = Math.min(window.innerWidth / DESIGN_W, availH / DESIGN_H);
+  const scale = Math.min(window.innerWidth / DESIGN_W, window.innerHeight / DESIGN_H);
   canvas.style.width = DESIGN_W * scale + 'px';
   canvas.style.height = DESIGN_H * scale + 'px';
   canvas.width = Math.round(DESIGN_W * scale * dpr);
