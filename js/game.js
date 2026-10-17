@@ -3,15 +3,39 @@
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
-const DESIGN_W = 440, DESIGN_H = 880;
+const DESIGN_W = 440;
 const GW = 100, GH = 100, CELL = 4, SUB = 6;
-const TOP_OFFSET = 32;
-const BOARD_X = (DESIGN_W - GW * CELL) / 2, BOARD_Y = 112 + TOP_OFFSET, BOARD_W = GW * CELL, BOARD_H = GH * CELL;
+const BOARD_MAX = 416;
+let cell = CELL, BOARD_W = GW * CELL, BOARD_H = GH * CELL, BOARD_X = (DESIGN_W - BOARD_W) / 2;
 const DANGER_ROW = Math.round(GH * 0.2), CLEAR_MIN = 600, DROP_STEP = 34;
-const SLOT_Y = 536 + TOP_OFFSET, SLOT_H = 120, SLOT_W = 120, SLOT_GAP = 16;
+const SLOT_H = 120, SLOT_W = 120, SLOT_GAP = 16;
 const SLOT_X0 = (DESIGN_W - (SLOT_W * 3 + SLOT_GAP * 2)) / 2;
-const BTN = { x: DESIGN_W / 2 - 95, y: 552 + TOP_OFFSET, w: 190, h: 58 };
-const SPEAKER = { x: DESIGN_W - 36, y: 10 + TOP_OFFSET, w: 26, h: 26, r: 7 };
+const EDGE_PAD = 12, HEADER_H = 100, FRAME = 6, BOARD_SLOT_GAP = 24, HINT_H = 30;
+const MIN_GAP = 12, MAX_GAP = 64;
+const MIN_H = EDGE_PAD * 2 + HEADER_H + HINT_H + FRAME * 2 + BOARD_MAX + BOARD_SLOT_GAP + SLOT_H + MIN_GAP * 2.5;
+
+const view = { scale: 1, w: DESIGN_W, h: MIN_H, ox: 0, k: 1, ex: 0 };
+
+function snapX(x) { return (Math.round(x * view.k + view.ex) - view.ex) / view.k; }
+function snapY(y) { return Math.round(y * view.k) / view.k; }
+let HEADER_Y = 0, BOARD_Y = 0, SLOT_Y = 0, HINT_Y = 0;
+const BTN = { x: DESIGN_W / 2 - 95, y: 0, w: 190, h: 58 };
+const SPEAKER = { x: DESIGN_W - 36, y: 0, w: 26, h: 26, r: 7 };
+
+function layout(safeTop, safeBottom) {
+  const top = safeTop + EDGE_PAD;
+  const bottom = view.h - safeBottom - EDGE_PAD;
+  HEADER_Y = top;
+  HINT_Y = bottom - 10;
+  const availTop = top + HEADER_H, availBottom = bottom - HINT_H;
+  const free = availBottom - availTop - (FRAME * 2 + BOARD_H + BOARD_SLOT_GAP + SLOT_H);
+  const gap = Math.max(MIN_GAP, Math.min(MAX_GAP, free / 2.5));
+  const extra = Math.max(0, free - gap * 2.5);
+  BOARD_Y = snapY(availTop + extra * 0.3 + gap + FRAME);
+  SLOT_Y = BOARD_Y + BOARD_H + FRAME + BOARD_SLOT_GAP + gap * 0.5;
+  SPEAKER.y = HEADER_Y + 10;
+  BTN.y = BOARD_Y + BOARD_H / 2 + 62;
+}
 
 const PALETTE = [null,
   ['#4a90e8', '#2c5cb0'],
@@ -20,6 +44,34 @@ const PALETTE = [null,
   ['#4db85c', '#2f8f3e'],
   ['#41c3cd', '#2b98a1']
 ];
+
+function hexToPx(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return ((0xff << 24) | ((n & 0xff) << 16) | (n & 0xff00) | (n >> 16)) >>> 0;
+}
+const PALETTE_PX = PALETTE.map(p => p && p.map(hexToPx));
+const boardCanvas = document.createElement('canvas');
+boardCanvas.width = GW;
+boardCanvas.height = GH;
+const bctx = boardCanvas.getContext('2d');
+const boardImg = bctx.createImageData(GW, GH);
+const boardPx = new Uint32Array(boardImg.data.buffer);
+const gridOverlay = document.createElement('canvas');
+const boardBig = document.createElement('canvas');
+const gctx = boardBig.getContext('2d');
+let gridOverlayPx = 0;
+
+function buildGridOverlay(px) {
+  gridOverlayPx = px;
+  gridOverlay.width = boardBig.width = GW * px;
+  gridOverlay.height = boardBig.height = GH * px;
+  if (px < 4) return;
+  const g = gridOverlay.getContext('2d');
+  g.fillStyle = 'rgba(0,0,0,0.22)';
+  for (let i = 1; i < GW; i++) g.fillRect(i * px, 0, 1, GH * px);
+  for (let i = 1; i < GH; i++) g.fillRect(0, i * px, GW * px, 1);
+}
+const safeProbe = document.getElementById('safe');
 
 const RAW_SHAPES = [
   { c: [[0, 0]] },
@@ -301,7 +353,7 @@ function startAim(i) {
 
 function updateAim(px) {
   const sh = queue[selSlot].shape;
-  const col = Math.floor((px - BOARD_X) / CELL) - ((sh.w - 1) >> 1);
+  const col = Math.floor((px - BOARD_X) / cell) - ((sh.w - 1) >> 1);
   aimCol = Math.max(0, Math.min(GW - sh.w, col));
 }
 
@@ -367,18 +419,49 @@ function drawGrain(x, y, c, size) {
   ctx.fillRect(BOARD_X + x * size, BOARD_Y + y * size, size, size);
 }
 
+function grainPx(x, y, c) {
+  return PALETTE_PX[c][((x * 73 + y * 151) & 7) < 3 ? 1 : 0];
+}
+
+function drawBoardGrains() {
+  boardPx.fill(0);
+  for (let i = 0; i < grid.length; i++) {
+    const c = grid[i];
+    if (c) boardPx[i] = grainPx(i % GW, (i / GW) | 0, c);
+  }
+  for (const f of fallings) {
+    const ry = Math.round(f.prevRow + (f.y - f.prevRow) * Math.min(f.dropAcc / DROP_STEP, 1));
+    for (const [cx, cy] of f.shape.cells) {
+      const gx = f.x + cx, gy = ry + cy;
+      if (gy >= 0 && gy < GH) boardPx[gy * GW + gx] = grainPx(gx, gy, f.color);
+    }
+  }
+  bctx.putImageData(boardImg, 0, 0);
+  let src = boardCanvas;
+  if (gridOverlayPx >= 4) {
+    gctx.globalCompositeOperation = 'copy';
+    gctx.imageSmoothingEnabled = false;
+    gctx.drawImage(boardCanvas, 0, 0, boardBig.width, boardBig.height);
+    gctx.globalCompositeOperation = 'source-atop';
+    gctx.drawImage(gridOverlay, 0, 0);
+    src = boardBig;
+  }
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(src, BOARD_X, BOARD_Y, BOARD_W, BOARD_H);
+}
+
 function render(now) {
   ctx.fillStyle = '#141d40';
-  ctx.fillRect(0, 0, DESIGN_W, DESIGN_H);
+  ctx.fillRect(-view.ox, 0, view.w, view.h);
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
   ctx.fillStyle = '#dfe6ff';
   ctx.font = '600 17px -apple-system,system-ui,sans-serif';
-  ctx.fillText('沙子俄罗斯方块', DESIGN_W / 2, 34 + TOP_OFFSET);
+  ctx.fillText('沙子俄罗斯方块', DESIGN_W / 2, HEADER_Y + 34);
   ctx.textAlign = 'left';
 
-  rr(24, 48 + TOP_OFFSET, 170, 52, 8);
+  rr(24, HEADER_Y + 48, 170, 52, 8);
   ctx.fillStyle = '#1a2452';
   ctx.fill();
   ctx.strokeStyle = '#2c3a70';
@@ -386,49 +469,44 @@ function render(now) {
   ctx.stroke();
   ctx.fillStyle = '#93a5dd';
   ctx.font = '12px -apple-system,system-ui,sans-serif';
-  ctx.fillText('分数', 36, 70 + TOP_OFFSET);
+  ctx.fillText('分数', 36, HEADER_Y + 70);
   ctx.fillStyle = '#ffffff';
   ctx.font = '600 22px -apple-system,system-ui,sans-serif';
-  ctx.fillText(String(score), 36, 93 + TOP_OFFSET);
+  ctx.fillText(String(score), 36, HEADER_Y + 93);
 
-  rr(DESIGN_W - 194, 48 + TOP_OFFSET, 170, 52, 8);
+  rr(DESIGN_W - 194, HEADER_Y + 48, 170, 52, 8);
   ctx.fillStyle = '#1a2452';
   ctx.fill();
   ctx.stroke();
   ctx.fillStyle = '#93a5dd';
   ctx.font = '12px -apple-system,system-ui,sans-serif';
-  ctx.fillText('最高分', DESIGN_W - 182, 70 + TOP_OFFSET);
+  ctx.fillText('最高分', DESIGN_W - 182, HEADER_Y + 70);
   ctx.fillStyle = '#ffd75e';
   ctx.font = '600 22px -apple-system,system-ui,sans-serif';
   ctx.textAlign = 'right';
-  ctx.fillText(String(best), DESIGN_W - 38, 93 + TOP_OFFSET);
+  ctx.fillText(String(best), DESIGN_W - 38, HEADER_Y + 93);
   ctx.textAlign = 'left';
 
-  rr(BOARD_X - 6, BOARD_Y - 6, BOARD_W + 12, BOARD_H + 12, 8);
+  rr(BOARD_X - FRAME, BOARD_Y - FRAME, BOARD_W + FRAME * 2, BOARD_H + FRAME * 2, 8);
   ctx.fillStyle = '#0e1430';
   ctx.fill();
   ctx.strokeStyle = '#31407a';
   ctx.lineWidth = 2;
   ctx.stroke();
 
+  drawBoardGrains();
+
   ctx.save();
   ctx.beginPath();
   ctx.rect(BOARD_X, BOARD_Y, BOARD_W, BOARD_H);
   ctx.clip();
 
-  for (let y = 0; y < GH; y++) {
-    for (let x = 0; x < GW; x++) {
-      const c = grid[y * GW + x];
-      if (c) drawGrain(x, y, c, CELL);
-    }
-  }
-
   for (const f of flashes) {
     const p = f.t / 450;
     ctx.globalAlpha = 1 - p;
     ctx.fillStyle = '#ffffff';
-    const s = CELL * (1 + p);
-    ctx.fillRect(BOARD_X + f.x * CELL + (CELL - s) / 2, BOARD_Y + f.y * CELL - p * 26, s, s);
+    const s = cell * (1 + p);
+    ctx.fillRect(BOARD_X + f.x * cell + (cell - s) / 2, BOARD_Y + f.y * cell - p * 26, s, s);
     ctx.globalAlpha = 1;
   }
 
@@ -436,24 +514,18 @@ function render(now) {
     const q = queue[selSlot];
     const sh = q.shape;
     ctx.fillStyle = 'rgba(255,255,255,0.06)';
-    ctx.fillRect(BOARD_X + aimCol * CELL, BOARD_Y, sh.w * CELL, BOARD_H);
+    ctx.fillRect(BOARD_X + aimCol * cell, BOARD_Y, sh.w * cell, BOARD_H);
     ctx.globalAlpha = 0.35;
     for (const [cx, cy] of sh.cells) {
-      drawGrain(aimCol + cx, cy, q.color, CELL);
+      drawGrain(aimCol + cx, cy, q.color, cell);
     }
     ctx.globalAlpha = 1;
-  }
-  for (const f of fallings) {
-    const ry = f.prevRow + (f.y - f.prevRow) * Math.min(f.dropAcc / DROP_STEP, 1);
-    for (const [cx, cy] of f.shape.cells) {
-      drawGrain(f.x + cx, Math.round(ry) + cy, f.color, CELL);
-    }
   }
 
   ctx.restore();
 
   ctx.fillStyle = '#ff3b30';
-  ctx.fillRect(BOARD_X, BOARD_Y + DANGER_ROW * CELL - 1.5, BOARD_W, 3);
+  ctx.fillRect(BOARD_X, BOARD_Y + DANGER_ROW * cell - 1.5, BOARD_W, 3);
 
   const slotScale = Math.min((SLOT_W - 30) / (24 * CELL), (SLOT_H - 30) / (18 * CELL));
   for (let i = 0; i < 3; i++) {
@@ -467,12 +539,22 @@ function render(now) {
     const p = queue[i];
     if (p && !(state === 'aim' && selSlot === i)) {
       const sh = p.shape;
-      const dw = CELL * slotScale;
-      const ox = sx + (SLOT_W - sh.w * dw) / 2;
-      const oy = SLOT_Y + (SLOT_H - sh.h * dw) / 2;
-      for (const [cx, cy] of sh.cells) {
-        ctx.fillStyle = PALETTE[p.color][0];
-        ctx.fillRect(ox + cx * dw, oy + cy * dw, dw, dw);
+      const dwPx = Math.max(1, Math.floor(CELL * slotScale * view.k));
+      const dw = dwPx / view.k;
+      const ox = snapX(sx + (SLOT_W - sh.w * dw) / 2);
+      const oy = snapY(SLOT_Y + (SLOT_H - sh.h * dw) / 2);
+      ctx.beginPath();
+      for (const [cx, cy] of sh.cells) ctx.rect(ox + cx * dw, oy + cy * dw, dw, dw);
+      ctx.fillStyle = PALETTE[p.color][0];
+      ctx.fill();
+      if (dwPx >= 4) {
+        const line = 1 / view.k;
+        ctx.save();
+        ctx.clip();
+        ctx.fillStyle = 'rgba(0,0,0,0.22)';
+        for (let cx = 1; cx < sh.w; cx++) ctx.fillRect(ox + cx * dw, oy, line, sh.h * dw);
+        for (let cy = 1; cy < sh.h; cy++) ctx.fillRect(ox, oy + cy * dw, sh.w * dw, line);
+        ctx.restore();
       }
     }
   }
@@ -480,23 +562,24 @@ function render(now) {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#55628f';
   ctx.font = '13px -apple-system,system-ui,sans-serif';
-  ctx.fillText('点选方块 · 棋盘上滑动选列 · 松手落下', DESIGN_W / 2, 840);
+  ctx.fillText('点选方块 · 棋盘上滑动选列 · 松手落下', DESIGN_W / 2, HINT_Y);
   ctx.textAlign = 'left';
 
   if (state === 'over') {
+    const ty = BTN.y - 82;
     ctx.fillStyle = 'rgba(6,8,20,0.72)';
-    ctx.fillRect(0, 0, DESIGN_W, DESIGN_H);
+    ctx.fillRect(-view.ox, 0, view.w, view.h);
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffffff';
     ctx.font = '600 34px -apple-system,system-ui,sans-serif';
-    ctx.fillText('游戏结束', DESIGN_W / 2, 470 + TOP_OFFSET);
+    ctx.fillText('游戏结束', DESIGN_W / 2, ty);
     ctx.font = '600 26px -apple-system,system-ui,sans-serif';
     ctx.fillStyle = '#ffd75e';
-    ctx.fillText(String(score), DESIGN_W / 2, 515 + TOP_OFFSET);
+    ctx.fillText(String(score), DESIGN_W / 2, ty + 45);
     if (newBest) {
       ctx.font = '14px -apple-system,system-ui,sans-serif';
       ctx.fillStyle = '#ff9f43';
-      ctx.fillText('新纪录!', DESIGN_W / 2, 540 + TOP_OFFSET);
+      ctx.fillText('新纪录!', DESIGN_W / 2, ty + 70);
     }
     rr(BTN.x, BTN.y, BTN.w, BTN.h, 29);
     ctx.fillStyle = '#2f66e0';
@@ -522,8 +605,7 @@ function render(now) {
 
 function toDesign(e) {
   const rect = canvas.getBoundingClientRect();
-  const scale = rect.width / DESIGN_W;
-  return [(e.clientX - rect.left) / scale, (e.clientY - rect.top) / scale];
+  return [(e.clientX - rect.left) / view.scale - view.ox, (e.clientY - rect.top) / view.scale];
 }
 
 function inBtn(px, py) {
@@ -549,7 +631,7 @@ canvas.addEventListener('pointerdown', e => {
     return;
   }
   if (state === 'idle') {
-    const idx = py >= SLOT_Y
+    const idx = py >= SLOT_Y && py <= SLOT_Y + SLOT_H
       ? Math.floor((px - SLOT_X0) / (SLOT_W + SLOT_GAP))
       : -1;
     if (idx >= 0 && idx < 3 && queue[idx] && px >= SLOT_X0 + idx * (SLOT_W + SLOT_GAP) && px <= SLOT_X0 + idx * (SLOT_W + SLOT_GAP) + SLOT_W) {
@@ -586,16 +668,39 @@ canvas.addEventListener('pointercancel', () => {
 });
 
 function resize() {
+  const vv = window.visualViewport;
+  const vw = Math.round(vv ? vv.width : window.innerWidth);
+  const vh = Math.round(vv ? vv.height : window.innerHeight);
+  const cs = getComputedStyle(safeProbe);
+  const safeTop = parseFloat(cs.paddingTop) || 0, safeBottom = parseFloat(cs.paddingBottom) || 0;
   const dpr = window.devicePixelRatio || 1;
-  const scale = Math.min(window.innerWidth / DESIGN_W, window.innerHeight / DESIGN_H);
-  canvas.style.width = DESIGN_W * scale + 'px';
-  canvas.style.height = DESIGN_H * scale + 'px';
-  canvas.width = Math.round(DESIGN_W * scale * dpr);
-  canvas.height = Math.round(DESIGN_H * scale * dpr);
-  ctx.setTransform(canvas.width / DESIGN_W, 0, 0, canvas.height / DESIGN_H, 0, 0);
+  const scale = Math.min(vw / DESIGN_W, (vh - safeTop - safeBottom) / MIN_H);
+  view.scale = scale;
+  view.w = vw / scale;
+  view.h = vh / scale;
+  view.ox = (view.w - DESIGN_W) / 2;
+  canvas.width = Math.floor(vw * dpr);
+  canvas.height = Math.floor(vh * dpr);
+  canvas.style.width = canvas.width / dpr + 'px';
+  canvas.style.height = canvas.height / dpr + 'px';
+  const k = dpr * scale;
+  view.k = k;
+  view.ex = k * view.ox;
+  ctx.setTransform(k, 0, 0, k, view.ex, 0);
+
+  let grainPx = Math.max(1, Math.round(CELL * k));
+  if (GW * grainPx / k > BOARD_MAX) grainPx = Math.max(1, grainPx - 1);
+  cell = grainPx / k;
+  BOARD_W = GW * cell;
+  BOARD_H = GH * cell;
+  BOARD_X = snapX((DESIGN_W - BOARD_W) / 2);
+  if (grainPx !== gridOverlayPx) buildGridOverlay(grainPx);
+  layout(safeTop / scale, safeBottom / scale);
 }
 
 window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', resize);
+if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
 
 refillQueue();
 generateInitialSand();
